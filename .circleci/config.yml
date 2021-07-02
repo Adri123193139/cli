@@ -1,153 +1,41 @@
-version: 2
+version: 2.1
 
-jobs:
-
-  lint:
-    working_directory: /work
-    docker: [{image: 'docker:20.10-git'}]
-    environment:
-      DOCKER_BUILDKIT: 1
-    steps:
-      - checkout
-      - setup_remote_docker:
-          version: 20.10.6
-          reusable: true
-          exclusive: false
-      - run:
-          name: "Docker version"
-          command: docker version
-      - run:
-          name: "Docker info"
-          command: docker info
-      - run:
-          name: "Shellcheck - build image"
-          command: |
-            docker build --progress=plain -f dockerfiles/Dockerfile.shellcheck --tag cli-validator:$CIRCLE_BUILD_NUM .
-      - run:
-          name: "Shellcheck"
-          command: |
-            docker run --rm cli-validator:$CIRCLE_BUILD_NUM \
-                make shellcheck
-      - run:
-          name: "Lint - build image"
-          command: |
-            docker build --progress=plain -f dockerfiles/Dockerfile.lint --tag cli-linter:$CIRCLE_BUILD_NUM .
-      - run:
-          name: "Lint"
-          command: |
-            docker run --rm cli-linter:$CIRCLE_BUILD_NUM
-
-  cross:
-    working_directory: /work
-    docker: [{image: 'docker:20.10-git'}]
-    environment:
-      DOCKER_BUILDKIT: 1
-      BUILDX_VERSION: "v0.5.1"
-    parallelism: 3
-    steps:
-      - checkout
-      - setup_remote_docker:
-          version: 20.10.6
-          reusable: true
-          exclusive: false
-      - run:
-          name: "Docker version"
-          command: docker version
-      - run:
-          name: "Docker info"
-          command: docker info
-      - run: apk add make curl
-      - run: mkdir -vp ~/.docker/cli-plugins/
-      - run: curl -fsSL --output ~/.docker/cli-plugins/docker-buildx https://github.com/docker/buildx/releases/download/${BUILDX_VERSION}/buildx-${BUILDX_VERSION}.linux-amd64
-      - run: chmod a+x ~/.docker/cli-plugins/docker-buildx
-      - run: docker buildx version
-      - run: docker context create buildctx
-      - run: docker buildx create --use buildctx && docker buildx inspect --bootstrap
-      - run: GROUP_INDEX=$CIRCLE_NODE_INDEX GROUP_TOTAL=$CIRCLE_NODE_TOTAL docker buildx bake cross --progress=plain
-      - store_artifacts:
-          path: /work/build
-
-  test:
-    working_directory: /work
-    docker: [{image: 'docker:20.10-git'}]
-    environment:
-      DOCKER_BUILDKIT: 1
-    steps:
-      - checkout
-      - setup_remote_docker:
-          version: 20.10.6
-          reusable: true
-          exclusive: false
-      - run:
-          name: "Docker version"
-          command: docker version
-      - run:
-          name: "Docker info"
-          command: docker info
-      - run:
-          name: "Unit Test with Coverage - build image"
-          command: |
-            mkdir -p test-results/unit-tests
-            docker build --progress=plain -f dockerfiles/Dockerfile.dev --tag cli-builder:$CIRCLE_BUILD_NUM .
-      - run:
-          name: "Unit Test with Coverage"
-          command: |
-            docker run \
-                -e GOTESTSUM_JUNITFILE=/tmp/junit.xml \
-                --name \
-                test-$CIRCLE_BUILD_NUM cli-builder:$CIRCLE_BUILD_NUM \
-                make test-coverage
-            docker cp \
-                test-$CIRCLE_BUILD_NUM:/tmp/junit.xml \
-                ./test-results/unit-tests/junit.xml
-      - run:
-          name: "Upload to Codecov"
-          command: |
-            docker cp \
-                test-$CIRCLE_BUILD_NUM:/go/src/github.com/docker/cli/coverage.txt \
-                coverage.txt
-            apk add -U bash curl
-            curl -s https://codecov.io/bash | bash || \
-                echo 'Codecov failed to upload'
-      - store_test_results:
-          path:  test-results
-      - store_artifacts:
-          path:  test-results
-
-  validate:
-    working_directory: /work
-    docker: [{image: 'docker:20.10-git'}]
-    environment:
-      DOCKER_BUILDKIT: 1
-    steps:
-      - checkout
-      - setup_remote_docker:
-          version: 20.10.6
-          reusable: true
-          exclusive: false
-      - run:
-          name: "Docker version"
-          command: docker version
-      - run:
-          name: "Docker info"
-          command: docker info
-      - run:
-          name: "Validate - build image"
-          command: |
-            rm -f .dockerignore # include .git
-            docker build --progress=plain -f dockerfiles/Dockerfile.dev --tag cli-builder-with-git:$CIRCLE_BUILD_NUM .
-      - run:
-          name: "Validate Vendor, Docs, and Code Generation"
-          command: |
-            docker run --rm cli-builder-with-git:$CIRCLE_BUILD_NUM \
-                make ci-validate
-          no_output_timeout: 15m
+orbs:
+  # The python orb contains a set of prepackaged CircleCI configuration you can use repeatedly in your configuration files
+  # Orb commands and jobs help you with common scripting around a language/tool
+  # so you dont have to copy and paste it everywhere.
+  # See the orb documentation here: https://circleci.com/developer/orbs/orb/circleci/python
+  python: circleci/python@1.2
 
 workflows:
-  version: 2
-  ci:
+  sample:  # This is the name of the workflow, feel free to change it to better match your workflow.
+    # Inside the workflow, you define the jobs you want to run. 
+    # For more details on extending your workflow, see the configuration docs: https://circleci.com/docs/2.0/configuration-reference/#workflows 
     jobs:
-      - lint
-      - cross
-      - test
-      - validate
+      - build-and-test
+
+
+jobs:
+  build-and-test:  # This is the name of the job, feel free to change it to better match what you're trying to do!
+    # These next lines defines a Docker executors: https://circleci.com/docs/2.0/executor-types/
+    # You can specify an image from Dockerhub or use one of the convenience images from CircleCI's Developer Hub
+    # A list of available CircleCI Docker convenience images are available here: https://circleci.com/developer/images/image/cimg/python
+    # The executor is the environment in which the steps below will be executed - below will use a python 3.9 container
+    # Change the version below to your required version of python
+    docker:
+      - image: cimg/python:3.8
+    # Checkout the code as the first step. This is a dedicated CircleCI step.
+    # The python orb's install-packages step will install the dependencies from a Pipfile via Pipenv by default.
+    # Here we're making sure we use just use the system-wide pip. By default it uses the project root's requirements.txt.
+    # Then run your tests!
+    # CircleCI will report the results back to your VCS provider.
+    steps:
+      - checkout
+      - python/install-packages:
+          pkg-manager: pip
+          # app-dir: ~/project/package-directory/  # If you're requirements.txt isn't in the root directory.
+          # pip-dependency-file: test-requirements.txt  # if you have a different name for your requirements file, maybe one that combines your runtime and test requirements.
+      - run:
+          name: Run tests
+          # This assumes pytest is installed via the install-package step above
+          command: pytest
